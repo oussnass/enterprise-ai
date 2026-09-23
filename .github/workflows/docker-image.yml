@@ -1,0 +1,28 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: api
+            context: services/api
+            dockerfile: services/api/Dockerfile
+          - name: web
+            context: apps/web
+            dockerfile: apps/web/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.name }} image
+        run: >-
+          docker build "${{ matrix.context }}"
+          --file "${{ matrix.dockerfile }}"
+          --tag "enterprise-ai-${{ matrix.name }}:${{ github.sha }}"
