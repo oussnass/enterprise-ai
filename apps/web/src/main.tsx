@@ -91,10 +91,20 @@ function App() {
         })
       });
 
-      const d = await r.json();
+      const body = await r.text();
+      let d: any;
+      try {
+        d = body ? JSON.parse(body) : null;
+      } catch (_) {
+        throw new Error(`Réponse invalide du serveur (${r.status})`);
+      }
 
       if (!r.ok) {
-        throw new Error(d.detail || 'Request failed');
+        throw new Error(d?.detail || `Erreur serveur (${r.status})`);
+      }
+
+      if (!d) {
+        throw new Error('Réponse vide du serveur');
       }
 
       setCid(d.conversation_id);
