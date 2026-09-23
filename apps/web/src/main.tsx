@@ -22,7 +22,7 @@ import {
 import './style.css';
 import { initAuth, authHeaders } from './auth';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || '';
 
 type Msg = {
   role: 'user' | 'assistant';
