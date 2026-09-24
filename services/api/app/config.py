@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     oidc_issuer: str = "http://localhost:8080/realms/enterprise"
     keycloak_client_id: str = "enterprise-ai"
     keycloak_client_secret: str = "change-me"
-    max_upload_mb: int = 50
+    max_upload_mb: int = 500
     log_level: str = "INFO"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 

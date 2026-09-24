@@ -39,9 +39,16 @@ function App() {
   const [docs, setDocs] = useState<any[]>([]);
   const [user, setUser] = useState<any>();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [uploadState, setUploadState] = useState<{
+    filename: string;
+    progress: number;
+    phase: 'uploading' | 'indexing' | 'error';
+    error?: string;
+  }>();
 
   const media = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     initAuth()
@@ -206,27 +213,77 @@ function App() {
     setRecording(false);
   }
 
-  async function upload(e: any) {
+  function upload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
 
-    if (!file) return;
+    if (!file || (uploadState && uploadState.phase !== 'error')) return;
+
+    e.target.value = '';
 
     const fd = new FormData();
     fd.append('file', file);
 
-    const r = await fetch(API + '/api/v1/documents', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: fd
+    const request = new XMLHttpRequest();
+    setUploadState({ filename: file.name, progress: 0, phase: 'uploading' });
+
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        setUploadState((state) =>
+          state
+            ? { ...state, progress: Math.round((event.loaded / event.total) * 100) }
+            : state
+        );
+      }
+    };
+
+    request.onerror = () => {
+      setUploadState({
+        filename: file.name,
+        progress: 0,
+        phase: 'error',
+        error: 'Impossible de joindre le serveur.'
+      });
+    };
+
+    request.onabort = () => {
+      setUploadState({
+        filename: file.name,
+        progress: 0,
+        phase: 'error',
+        error: 'Le chargement a été interrompu.'
+      });
+    };
+
+    request.onload = () => {
+      let d: any;
+      try {
+        d = request.responseText ? JSON.parse(request.responseText) : null;
+      } catch (_) {
+        d = null;
+      }
+
+      if (request.status >= 200 && request.status < 300 && d) {
+        setUploadState((state) =>
+          state ? { ...state, progress: 100, phase: 'indexing' } : state
+        );
+        setDocs((x) => [d, ...x]);
+        window.setTimeout(() => setUploadState(undefined), 700);
+        return;
+      }
+
+      setUploadState({
+        filename: file.name,
+        progress: 0,
+        phase: 'error',
+        error: d?.detail || `Le serveur a refusé le fichier (${request.status}).`
+      });
+    };
+
+    request.open('POST', API + '/api/v1/documents');
+    Object.entries(authHeaders()).forEach(([name, value]) => {
+      request.setRequestHeader(name, value);
     });
-
-    const d = await r.json();
-
-    if (r.ok) {
-      setDocs((x) => [d, ...x]);
-    } else {
-      alert(d.detail || 'Upload failed');
-    }
+    request.send(fd);
   }
 
   function newChat() {
@@ -316,16 +373,50 @@ function App() {
           <div className="section-title">
             <span>Knowledge</span>
 
-            <label className="add-document">
+            <button
+              className="add-document"
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              disabled={Boolean(uploadState && uploadState.phase !== 'error')}
+              title="Ajouter une source"
+            >
               <Plus size={15} />
-              <input
-                type="file"
-                hidden
-                accept=".pdf,.docx,.txt,.md,.csv,.json"
-                onChange={upload}
-              />
-            </label>
+            </button>
           </div>
+
+          <input
+            ref={fileInput}
+            className="document-file-input"
+            type="file"
+            accept=".pdf,.docx,.txt,.md,.csv,.json"
+            onClick={(event) => {
+              event.currentTarget.value = '';
+            }}
+            onChange={upload}
+          />
+
+          {uploadState && (
+            <div className={`upload-status ${uploadState.phase === 'error' ? 'error' : ''}`}>
+              <div className="upload-status-header">
+                <span title={uploadState.filename}>{uploadState.filename}</span>
+                <strong>
+                  {uploadState.phase === 'error'
+                    ? '!'
+                    : uploadState.phase === 'indexing'
+                      ? 'Indexation...'
+                      : `${uploadState.progress}%`}
+                </strong>
+              </div>
+              {uploadState.phase !== 'error' && (
+                <div className="upload-progress" aria-label={`Progression du chargement: ${uploadState.progress}%`}>
+                  <span style={{ width: `${uploadState.progress}%` }} />
+                </div>
+              )}
+              {uploadState.phase === 'error' && (
+                <div className="upload-error">{uploadState.error}</div>
+              )}
+            </div>
+          )}
 
           <div className="documents">
 
@@ -636,6 +727,8 @@ function App() {
 
             <button
               className="composer-button attachment-button"
+              onClick={() => fileInput.current?.click()}
+              disabled={Boolean(uploadState && uploadState.phase !== 'error')}
               title="Add document"
             >
               <Paperclip size={18} />

@@ -10,7 +10,7 @@ from .db import db_execute, db_fetchall, db_fetchone
 from .llm import classify_intent, get_llm
 from .rag import RAGService
 from .storage import ObjectStorage
-from .document import extract_salary_scale_markdown, extract_text, chunk_text
+from .document import extract_salary_scale_markdown, salary_scale_markdown_from_text, extract_text, chunk_text, sanitize_text
 from .voice import transcribe_audio, synthesize_piper
 
 logging.basicConfig(level=logging.INFO)
@@ -52,7 +52,11 @@ def is_topic_request(message: str) -> bool:
 
 def requests_salary_table(message: str) -> bool:
     normalized=message.lower()
-    return any(term in normalized for term in ('grille salariale', 'grille de salaire', 'grille chiffr', 'salary scale'))
+    return any(term in normalized for term in ('grille salariale', 'grille de salaire', 'grille des salaires', 'grille des rémunérations', 'grille chiffr', 'salary scale'))
+
+def is_eneo_convention(filename: str) -> bool:
+    normalized=filename.casefold()
+    return 'eneo' in normalized and 'convention' in normalized
 @app.on_event('startup')
 async def startup():
     global rag,storage
@@ -121,14 +125,16 @@ async def chat(req:ChatRequest,user:CurrentUser=Depends(get_current_user)):
             retrieval_query=f'{previous_topics} {req.message}'.strip()
             retrieval_limit=1 if any(term in retrieval_query.lower() for term in ('grille', 'salaire', 'salary', 'wage')) else retrieval_limit
             hits=rag.search(retrieval_query,retrieval_limit)
+            unique_hits=[]
             for h in hits:
-                p=h.payload or {}; retrieved_chunks.append(p); document_key=p.get('document_id') or p.get('filename','')
-                if document_key not in cited_documents:
-                    cited_documents.add(document_key)
-                    citations.append({'document_id':p.get('document_id',''),'filename':p.get('filename',''),'chunk_index':p.get('chunk_index',0),'score':float(getattr(h,'score',0.0) or 0.0)})
+                p=h.payload or {}; document_key=str(p.get('filename') or p.get('document_id') or '').casefold()
+                if document_key in cited_documents:
+                    continue
+                cited_documents.add(document_key); unique_hits.append(h); retrieved_chunks.append(p)
+                citations.append({'document_id':p.get('document_id',''),'filename':p.get('filename',''),'chunk_index':p.get('chunk_index',0),'score':float(getattr(h,'score',0.0) or 0.0)})
             context_limit=2200 if salary_table else 800
             context_parts=[]
-            for p in [h.payload or {} for h in hits]:
+            for p in [h.payload or {} for h in unique_hits]:
                 raw_content=str(p.get('content',''))
                 content=raw_content if salary_table else ' '.join(raw_content.split())
                 if salary_table:
@@ -139,9 +145,12 @@ async def chat(req:ChatRequest,user:CurrentUser=Depends(get_current_user)):
             context='\n\n'.join(context_parts)
         except Exception as e: logging.warning('RAG unavailable: %s',e)
     if salary_table and retrieved_chunks:
+        structured_table=salary_scale_markdown_from_text('\n'.join(str(item.get('content','')) for item in retrieved_chunks))
+        if structured_table:
+            answer='Voici la grille salariale extraite de l’Appendice 3 :\n\n'+structured_table
         document_id=retrieved_chunks[0].get('document_id')
         document_row=await db_fetchone('SELECT object_key FROM documents WHERE id=:d',{'d':document_id}) if document_id else None
-        if document_row:
+        if answer is None and document_row:
             structured_table=extract_salary_scale_markdown(storage.get(document_row['object_key']))
             if structured_table:
                 answer='Voici la grille salariale extraite de l’Appendice 3 :\n\n'+structured_table
@@ -170,15 +179,28 @@ async def chat(req:ChatRequest,user:CurrentUser=Depends(get_current_user)):
 async def upload_document(file:UploadFile=File(...),user:CurrentUser=Depends(get_current_user)):
     data=await file.read()
     if len(data)>s.max_upload_mb*1024*1024: raise HTTPException(413,'File too large')
-    doc_id=str(uuid.uuid4()); key=f'{user.external_id}/{doc_id}/{file.filename}'
+    filename=sanitize_text(file.filename or 'document')
+    doc_id=str(uuid.uuid4()); key=f'{user.external_id}/{doc_id}/{filename}'
     try:
+        if is_eneo_convention(filename):
+            previous_documents=await db_fetchall("""SELECT id FROM documents
+                WHERE lower(filename) LIKE '%eneo%'
+                  AND lower(filename) LIKE '%convention%'""")
+        else:
+            previous_documents=await db_fetchall('SELECT id FROM documents WHERE filename=:f',{'f':filename})
         storage.put(key,data,file.content_type or 'application/octet-stream')
-        text=extract_text(file.filename,data); chunks=chunk_text(text)
-        vector_ids=rag.index_chunks(doc_id,file.filename,chunks,{'owner':user.external_id}) if chunks else []
-        await db_execute('INSERT INTO documents(id,filename,object_key,mime_type,size_bytes,status,metadata) VALUES(:id,:f,:o,:m,:s,:st,:md)',{'id':doc_id,'f':file.filename,'o':key,'m':file.content_type,'s':len(data),'st':'indexed','md':json.dumps({'owner':user.external_id,'chunks':len(chunks)})})
+        text=extract_text(filename,data); chunks=chunk_text(text)
+        if not chunks:
+            raise ValueError('Impossible d’extraire du texte de ce document, y compris par OCR.')
+        vector_ids=rag.index_chunks(doc_id,filename,chunks,{'owner':user.external_id}) if chunks else []
+        await db_execute('INSERT INTO documents(id,filename,object_key,mime_type,size_bytes,status,metadata) VALUES(:id,:f,:o,:m,:s,:st,:md)',{'id':doc_id,'f':filename,'o':key,'m':file.content_type,'s':len(data),'st':'indexed','md':json.dumps({'owner':user.external_id,'chunks':len(chunks)})})
         for i,(chunk,vid) in enumerate(zip(chunks,vector_ids)):
             await db_execute('INSERT INTO document_chunks(document_id,chunk_index,content,vector_id) VALUES(:d,:i,:c,:v)',{'d':doc_id,'i':i,'c':chunk,'v':vid})
-        return DocumentResponse(id=doc_id,filename=file.filename,status='indexed',size_bytes=len(data))
+        for previous_document in previous_documents:
+            previous_id=str(previous_document['id'])
+            rag.delete_document(previous_id)
+            await db_execute('DELETE FROM documents WHERE id=:d',{'d':previous_id})
+        return DocumentResponse(id=doc_id,filename=filename,status='indexed',size_bytes=len(data))
     except Exception as e:
         logging.exception('document indexing failed'); raise HTTPException(500,str(e))
 

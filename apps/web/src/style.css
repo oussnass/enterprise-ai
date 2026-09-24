@@ -189,6 +189,77 @@ button {
   color: #2563eb;
 }
 
+.add-document:disabled,
+.composer-button:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.document-file-input {
+  display: none;
+}
+
+.upload-status {
+  margin: 4px 10px 10px;
+  padding: 9px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  color: #526176;
+  background: #f8fbff;
+  font-size: 11px;
+}
+
+.upload-status.error {
+  border-color: #fecaca;
+  color: #b42318;
+  background: #fff7f7;
+}
+
+.upload-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.upload-status-header span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.upload-status-header strong {
+  flex-shrink: 0;
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.upload-status.error .upload-status-header strong {
+  color: #b42318;
+}
+
+.upload-progress {
+  height: 4px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbeafe;
+}
+
+.upload-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.15s ease;
+}
+
+.upload-error {
+  margin-top: 5px;
+  line-height: 1.35;
+}
+
 .documents {
   overflow-y: auto;
   max-height: 260px;
